@@ -70,18 +70,18 @@ def run_sequence(versuch, direction="down"):
     
     client.publish(COMMAND_TOPIC, valve_open)
     client.loop_write()
-    time.sleep(10)
+    time.sleep(5)
 
     if direction == "down":
         client.publish(COMMAND_TOPIC, "phdown")
     else:
         client.publish(COMMAND_TOPIC, "phup")
     client.loop_write()
-    time.sleep(10)
+    time.sleep(5)
 
     client.publish(COMMAND_TOPIC, "water")
     client.loop_write()
-    time.sleep(20)
+    time.sleep(15)
 
     client.publish(COMMAND_TOPIC, valve_close)
     client.loop_write()
