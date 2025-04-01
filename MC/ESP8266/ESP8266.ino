@@ -1,3 +1,5 @@
+//ESP8266
+
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <map>
@@ -47,9 +49,9 @@ void setupWiFi() {
 
 void connectToMQTT() {
     while (!client.connected()) {
-        if (client.connect("ESP8266Client", mqttUser, mqttPassword)) {
-            client.subscribe((String(deviceID) + "/#").c_str());
-            client.publish((String(deviceID) + "/status").c_str(), "connected");
+        if (client.connect(deviceID, mqttUser, mqttPassword)) {
+            client.subscribe("HW-888/command");
+            client.publish("HW-888/status", "connected");
         } else {
             delay(2000);
         }
@@ -63,9 +65,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
     }
     String topicStr = String(topic);
 
-    if (topicStr.startsWith(deviceID + String("/"))) {
-        String command = message;
-        Serial.println(command);
+    if (topicStr == "HW-888/command") {
+        message.trim();
+        Serial.println(message); // Nur der reine Befehl wird weitergegeben
     }
 }
 

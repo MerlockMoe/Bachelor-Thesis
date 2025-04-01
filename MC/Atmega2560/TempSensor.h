@@ -1,3 +1,4 @@
+// TempSensor.h
 #ifndef TEMPERATURESENSOR_H
 #define TEMPERATURESENSOR_H
 
@@ -10,11 +11,15 @@ private:
     OneWire oneWire;
     DallasTemperature sensors;
     bool initialized;
+    float calibrationOffset;
+    int eepromAddress;
 public:
     TempSensor(int pin);
-    bool begin();
+    bool begin(int addr);
     float readTemperature();
+    float getRawTemperature();
     bool isConnected();
+    void setOffset(float offset);
 };
 
 #endif
