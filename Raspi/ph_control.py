@@ -13,8 +13,8 @@ COMMAND_TOPIC = "HW-888/command"
 # pH-Schwellenwerte
 PH_HIGH = 6.7
 PH_LOW = 6.3
-PH_DURATION_THRESHOLD = 1 * 60  # 10 Minuten in Sekunden
-PH_COOLDOWN = 2 * 60  # 20 Minuten in Sekunden
+PH_DURATION_THRESHOLD = 0.5 * 60  # 10 Minuten in Sekunden
+PH_COOLDOWN = 1 * 60  # 20 Minuten in Sekunden
 
 # Speichert pH-Verlauf je Versuch
 ph_history = {
@@ -64,18 +64,18 @@ def on_message(client, userdata, msg):
             run_sequence(versuch, direction="up")
             last_action_time[versuch] = now
 
-def run_sequence(versuch, direction="down"):
+def run_sequence(versuch, direction):
     valve_open = f"{versuch.lower()}valveopen"
     valve_close = f"{versuch.lower()}valveclose"
     
     client.publish(COMMAND_TOPIC, valve_open)
-    time.sleep(1)
+    time.sleep(10)
 
     if direction == "down":
         client.publish(COMMAND_TOPIC, "phdown")
     else:
         client.publish(COMMAND_TOPIC, "phup")
-    time.sleep(3)
+    time.sleep(5)
 
     client.publish(COMMAND_TOPIC, "water")
     time.sleep(16)
