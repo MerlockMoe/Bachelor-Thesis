@@ -148,7 +148,7 @@ void checkForCommand() {
         } else if (command.equals("water")) {
             Serial.println("Bewege Water Stepper");
             digitalWrite(WATER_ENABLE, LOW); // Stepper aktivieren
-            int newPos = stepperWater.getStepper().currentPosition() + 25000;
+            int newPos = stepperWater.getStepper().currentPosition() + 20000;
             stepperWater.moveToPosition(newPos);    
         } else if (command.startsWith("v1eccal")) {
             Serial.println("Kalibriere v1 EC-Sensor");
