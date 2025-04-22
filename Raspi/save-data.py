@@ -20,9 +20,13 @@ class MqttLogger:
         self.latest_messages = {}  # Speichert letzte Nachricht je Topic
         self.topic_list = set()
 
+        # Verzeichnis für Logdateien definieren
+        self.log_dir = "/logs"  # Pfad anpassen
+        os.makedirs(self.log_dir, exist_ok=True)
+
         # Dateiname basierend auf aktuellem Tag
         self.date_str = datetime.now().strftime('%Y%m%d')
-        self.filename = f"mqtt_log_{self.date_str}.csv"
+        self.filename = os.path.join(self.log_dir, f"mqtt_log_{self.date_str}.csv")
 
         # Datei anlegen mit Header, falls sie noch nicht existiert
         if not os.path.isfile(self.filename):
