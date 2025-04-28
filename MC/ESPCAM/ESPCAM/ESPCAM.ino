@@ -39,12 +39,15 @@ void setup() {
     setupCamera();
 
     // WLAN-Ereignisse: nach IP -> MQTT verbinden
-    WiFi.onEvent([](WiFiEvent_t event){
-        if (event == SYSTEM_EVENT_STA_GOT_IP) {
-            Serial.println("WLAN verbunden");
-            connectToMqtt();
+    WiFi.onEvent(
+      [](WiFiEvent_t event, WiFiEventInfo_t info) {
+        if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+          Serial.println("WLAN verbunden");
+          connectToMqtt();
         }
-    });
+      },
+      ARDUINO_EVENT_WIFI_STA_GOT_IP
+    );
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     // Timer für automatischen MQTT-Reconnect anlegen
@@ -123,16 +126,40 @@ void setupCamera() {
     config.pin_sscb_scl = SIOC_GPIO_NUM;
     config.pin_pwdn     = PWDN_GPIO_NUM;
     config.pin_reset    = RESET_GPIO_NUM;
-    config.xclk_freq_hz = 20000000;
-    config.pixel_format = PIXFORMAT_JPEG;
-    config.frame_size   = FRAMESIZE_QVGA;  // 320×240 für geringen Speicherbedarf
-    config.jpeg_quality = 20;              // höhere Kompression
+    config.xclk_freq_hz = 10000000;
+    config.pixel_format = PIXFORMAT_RGB565;
+    config.frame_size   = FRAMESIZE_VGA;
+    config.jpeg_quality = 10;
     config.fb_count     = 1;
+    config.fb_location = CAMERA_FB_IN_PSRAM;
 
     esp_err_t err = esp_camera_init(&config);
+    // Kamera initialisiert – jetzt Sensor-Settings anpassen
+    sensor_t* s = esp_camera_sensor_get();
+    Serial.printf("Sensor-PID: 0x%04x\n", s->id.PID);
+
+    // 1) Weißabgleich auf Leuchtstoffröhrenlicht (Indoor):
+    s->set_whitebal(s, false);   // Automatik aus
+    s->set_wb_mode(s, 6);        // 6 = Fluorescent (Röhrenlicht)
+
+    // 2) Belichtung verkürzen, damit das Band nicht ausfrisst:
+    s->set_exposure_ctrl(s, false);  // AE aus
+    s->set_aec2(s, false);           // Zweiten AEC-Algorithmus aus
+    s->set_ae_level(s, 0);           // Neutraler Level (0)
+    s->set_aec_value(s, 100);        // Kleinerer Wert → kürzere Belichtungszeit
+
+    // 3) Verstärkung reduzieren, um Farb- und Rauschfehler zu minimieren:
+    s->set_gain_ctrl(s, false);      // AGC aus
+    s->set_agc_gain(s, 1);           // Minimaler manueller Gain
+
+    // 4) Farbsättigung und Kontrast anpassen, um Grün-Shift zu mildern:
+    s->set_saturation(s, -2);        // Weniger Sättigung
+    s->set_contrast(s, -1);          // Leicht weniger Kontrast
+    s->set_brightness(s, 0);         // Neutral
+
     if (err != ESP_OK) {
         Serial.printf("Kamera-Init FEHLGESCHLAGEN: 0x%x\n", err);
-        while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+        while (true) { delay(1000); }
     }
 }
 
@@ -156,7 +183,13 @@ void publishImageInChunks() {
     size_t sent = 0;
     while (sent < len) {
         size_t sz = min(CHUNK_SIZE, len - sent);
-        mqttClient.publish(DATA_TOPIC, 0, false, fb->buf + sent, sz);
+        mqttClient.publish(
+          DATA_TOPIC,
+          0,
+          false,
+          reinterpret_cast<const char*>(fb->buf + sent),
+          sz
+        );
         sent += sz;
         vTaskDelay(pdMS_TO_TICKS(1));  // kurz pausieren für WiFi-Task
     }
