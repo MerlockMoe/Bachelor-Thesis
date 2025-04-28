@@ -1,15 +1,43 @@
-from flask import Flask, request
+#!/usr/bin/env python3
+import socket
+import struct
+import os
+from datetime import datetime
 
-app = Flask(__name__)
+HOST = '0.0.0.0'
+PORT = 6000
+SAVE_DIR = '/home/joe/esp_images'
 
-@app.route('/upload', methods=['POST'])
-def upload():
-    img = request.data
-    with open('/tmp/esp_image.jpg', 'wb') as f:
-        f.write(img)
-    print("Bild empfangen und gespeichert")
-    return 'OK', 200
+os.makedirs(SAVE_DIR, exist_ok=True)
 
-if __name__ == '__main__':
-    # Lauscht auf allen Interfaces, Port 5000
-    app.run(host='0.0.0.0', port=5000)
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.bind((HOST, PORT))
+server.listen(1)
+print(f"TCP-Server lauscht auf Port {PORT}")
+
+while True:
+    conn, addr = server.accept()
+    try:
+        # 4-Byte-Länge lesen
+        raw_len = conn.recv(4)
+        if len(raw_len) < 4:
+            continue
+        length = struct.unpack('<I', raw_len)[0]
+
+        # Bilddaten empfangen
+        data = b''
+        while len(data) < length:
+            chunk = conn.recv(min(4096, length - len(data)))
+            if not chunk:
+                break
+            data += chunk
+
+        # Datei speichern
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"{SAVE_DIR}/esp_capture_{timestamp}.jpg"
+        with open(filename, 'wb') as f:
+            f.write(data)
+        print(f"Empfangen und gespeichert: {filename}")
+
+    finally:
+        conn.close()
