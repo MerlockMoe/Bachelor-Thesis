@@ -1,38 +1,31 @@
+// === ESP32-CAM: Bildaufnahme per MQTT + Bereitstellung via HTTP ===
+#include <WiFi.h>
+#include <PubSubClient.h>
 #include "esp_camera.h"
 #include "Arduino.h"
+#include <ESPAsyncWebServer.h>
+#include <base64.h>  // Arduino-kompatible Base64-Library
 
-// AI-Thinker ESP32-CAM Pinbelegung
-#define PWDN_GPIO_NUM     -1
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM      0
-#define SIOD_GPIO_NUM     26
-#define SIOC_GPIO_NUM     27
+#define CAMERA_MODEL_AI_THINKER
+#include "camera_pins.h"
 
-#define Y9_GPIO_NUM       35
-#define Y8_GPIO_NUM       34
-#define Y7_GPIO_NUM       39
-#define Y6_GPIO_NUM       36
-#define Y5_GPIO_NUM       21
-#define Y4_GPIO_NUM       19
-#define Y3_GPIO_NUM       18
-#define Y2_GPIO_NUM        5
+const char* ssid = "TP-Link_9FA0";
+const char* password = "24269339";
+const char* mqttServer = "192.168.0.120";
+const int mqttPort = 1883;
+const char* mqttUser = "joe";
+const char* mqttPassword = "1337";
 
-#define VSYNC_GPIO_NUM    25
-#define HREF_GPIO_NUM     23
-#define PCLK_GPIO_NUM     22
+const char* topicTrigger = "cam/CAM01/capture";
 
-// Onboard LED (AI Thinker: GPIO 33)
-#define LED_PIN 33
+WiFiClient espClient;
+PubSubClient client(espClient);
+AsyncWebServer server(80);
 
-void setup() {
-  // LED vorbereiten
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW); // LED aus
+bool imageRequested = false;
+camera_fb_t* capturedFrame = nullptr;
 
-  Serial.begin(115200);
-  delay(3000); // Stabilisierung nach Stromzufuhr
-
-  // Kamera-Konfiguration
+void setupCamera() {
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -54,27 +47,80 @@ void setup() {
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_QVGA; // Klein für schnellen Test
-  config.jpeg_quality = 12; // 0 = beste, 63 = schlechteste
+
+  config.frame_size = FRAMESIZE_VGA;
+  config.jpeg_quality = 10;
   config.fb_count = 1;
 
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("Kamera-Init FEHLGESCHLAGEN mit Fehlercode 0x%x\n", err);
+    Serial.printf("Kamera-Init FEHLGESCHLAGEN: 0x%x\n", err);
     return;
-  }
-
-  Serial.println("Kamerainitialisierung erfolgreich!");
-
-  // LED blinkt zur Bestätigung
-  for (int i = 0; i < 5; i++) {
-    digitalWrite(LED_PIN, HIGH);
-    delay(200);
-    digitalWrite(LED_PIN, LOW);
-    delay(200);
   }
 }
 
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Verbinde mit MQTT...");
+    if (client.connect("CAM-V1", mqttUser, mqttPassword)) {
+      Serial.println("verbunden");
+      client.subscribe(topicTrigger);
+    } else {
+      Serial.print("Fehler: ");
+      Serial.println(client.state());
+      delay(5000);
+    }
+  }
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  if (strcmp(topic, topicTrigger) == 0) {
+    imageRequested = true;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(3000);
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWLAN verbunden");
+
+  setupCamera();
+  client.setServer(mqttServer, mqttPort);
+  client.setCallback(callback);
+
+  server.on("/latest.jpg", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (capturedFrame) {
+      request->send_P(200, "image/jpeg", (const uint8_t*)capturedFrame->buf, capturedFrame->len);
+    } else {
+      request->send(404, "text/plain", "Kein Bild verfügbar");
+    }
+  });
+  server.begin();
+}
+
 void loop() {
-  // leer
+  if (!client.connected()) reconnect();
+  client.loop();
+
+  if (imageRequested) {
+    imageRequested = false;
+
+    if (capturedFrame) {
+      esp_camera_fb_return(capturedFrame);
+      capturedFrame = nullptr;
+    }
+
+    capturedFrame = esp_camera_fb_get();
+    if (!capturedFrame) {
+      Serial.println("Fehler: Kein Bild erhalten");
+    } else {
+      Serial.println("Bild aufgenommen und bereitgestellt");
+    }
+  }
 }
