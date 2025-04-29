@@ -29,7 +29,7 @@ def on_message(client, userdata, msg):
     elif msg.topic == END_TOPIC:
         if len(buffer) == expected_len:
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            fn = f"{SAVE_DIR}/esp_{ts}.raw"
+            fn = f"{SAVE_DIR}/esp_{ts}.jpg"
             with open(fn, "wb") as f:
                 f.write(buffer)
             print(f"Bild gespeichert: {fn}")

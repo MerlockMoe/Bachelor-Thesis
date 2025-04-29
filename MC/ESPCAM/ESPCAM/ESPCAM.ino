@@ -137,24 +137,26 @@ void setupCamera() {
     sensor_t* s = esp_camera_sensor_get();
     Serial.printf("Sensor-PID: 0x%04x\n", s->id.PID);
 
-    // 1) Weißabgleich auf Leuchtstoffröhrenlicht (Indoor):
+
+    // 1) Weißabgleich auf “Office” (3)
     s->set_whitebal(s, false);   // Automatik aus
-    s->set_wb_mode(s, 6);        // 6 = Fluorescent (Röhrenlicht)
+    s->set_wb_mode(s, 3);        // 3 = Office
 
-    // 2) Belichtung verkürzen, damit das Band nicht ausfrisst:
-    s->set_exposure_ctrl(s, false);  // AE aus
-    s->set_aec2(s, false);           // Zweiten AEC-Algorithmus aus
-    s->set_ae_level(s, 0);           // Neutraler Level (0)
-    s->set_aec_value(s, 100);        // Kleinerer Wert → kürzere Belichtungszeit
+    // 2) Belichtung manuell regeln
+    s->set_exposure_ctrl(s, false);  // Auto-Exposure aus
+    s->set_aec2(s, false);           // Zweiter AEC-Algorithmus aus
+    s->set_ae_level(s, -2);           // Neutraler Level
+    s->set_aec_value(s, 0);        // Belichtungszeit
 
-    // 3) Verstärkung reduzieren, um Farb- und Rauschfehler zu minimieren:
-    s->set_gain_ctrl(s, false);      // AGC aus
-    s->set_agc_gain(s, 1);           // Minimaler manueller Gain
+    // 3) Gain (Verstärkung) feinjustieren
+    s->set_gain_ctrl(s, false);      // Auto-Gain aus
+    s->set_agc_gain(s, 0);           // Minimaler Gain
 
-    // 4) Farbsättigung und Kontrast anpassen, um Grün-Shift zu mildern:
-    s->set_saturation(s, -2);        // Weniger Sättigung
-    s->set_contrast(s, -1);          // Leicht weniger Kontrast
-    s->set_brightness(s, 0);         // Neutral
+    // 4) Feintuning für Farb- und Kontrastkorrektur
+    s->set_brightness(s, 1);         // Heller +1
+    s->set_saturation(s, -1);        // Weniger Sättigung
+    s->set_contrast(s, 0);           // Neutral
+
 
     if (err != ESP_OK) {
         Serial.printf("Kamera-Init FEHLGESCHLAGEN: 0x%x\n", err);
