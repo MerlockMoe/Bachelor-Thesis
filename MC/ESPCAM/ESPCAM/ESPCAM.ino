@@ -128,9 +128,8 @@ void setupCamera() {
     config.pin_reset    = RESET_GPIO_NUM;
     config.xclk_freq_hz = 10000000;
     config.pixel_format = PIXFORMAT_RGB565;
-    config.frame_size   = FRAMESIZE_VGA;
-    config.jpeg_quality = 10;
-    config.fb_count     = 1;
+    config.frame_size   = FRAMESIZE_QVGA;
+    config.fb_count     = 2;
     config.fb_location = CAMERA_FB_IN_PSRAM;
 
     esp_err_t err = esp_camera_init(&config);
