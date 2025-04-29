@@ -4,12 +4,12 @@ import glob
 import numpy as np
 from PIL import Image
 
-# Parameter
+# Parameter für die Konversion
 WIDTH = 320
 HEIGHT = 240
 RAW_EXT = ".raw"
 OUT_EXT = ".png"
-INPUT_DIR = "."  # Verzeichnis mit den .raw-Dateien
+INPUT_DIR = "/home/joe/esp_images"  # Verzeichnis mit den .raw-Dateien
 
 def convert_raw_to_png(raw_path, width, height, out_path):
     # Raw-Datei einlesen
@@ -38,7 +38,7 @@ def main():
     pattern = os.path.join(INPUT_DIR, f"*{RAW_EXT}")
     raws = glob.glob(pattern)
     if not raws:
-        print("Keine .raw-Dateien gefunden.")
+        print(f"Keine {RAW_EXT}-Dateien in {INPUT_DIR} gefunden.")
         return
 
     for raw_path in raws:
