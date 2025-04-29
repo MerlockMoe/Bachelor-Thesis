@@ -127,7 +127,7 @@ void setupCamera() {
     config.pin_pwdn     = PWDN_GPIO_NUM;
     config.pin_reset    = RESET_GPIO_NUM;
     config.xclk_freq_hz = 10000000;
-    config.pixel_format = PIXFORMAT_RGB565;
+    config.pixel_format = PIXFORMAT_YUV422;
     config.frame_size   = FRAMESIZE_QVGA;
     config.fb_count     = 2;
     config.fb_location = CAMERA_FB_IN_PSRAM;
