@@ -58,29 +58,30 @@ class MqttLogger:
             is_new_file = not os.path.isfile(self.filename) or os.stat(self.filename).st_size == 0
             timestamp_id = datetime.now().strftime('%d-%H-%M')
 
+            # Filtere Topics und entferne alle "waterLow"-Daten
+            filtered_topics = [topic for topic in self.topic_list if "waterLow" not in topic]
+            filtered_messages = {topic: self.latest_messages.get(topic, "") for topic in filtered_topics}
+
             # Sicherstellen, dass Spaltenreihenfolge konsistent bleibt
-            topics = sorted(self.topic_list)
+            filtered_topics = sorted(filtered_topics)
 
             with open(self.filename, mode='a', newline='') as csv_file:
                 writer = csv.writer(csv_file)
 
                 # Header wird nur einmal geschrieben, wenn die Datei neu ist
                 if is_new_file:
-                    header = ["id"] + topics
+                    header = ["id"] + filtered_topics
                     writer.writerow(header)
 
-                row = [timestamp_id] + [self.latest_messages.get(topic, "") for topic in topics]
+                row = [timestamp_id] + [filtered_messages.get(topic, "") for topic in filtered_topics]
                 writer.writerow(row)
 
             print(f"Messreihe um {timestamp_id} in {self.filename} gespeichert.")
 
         self.start_csv_timer()  # Timer neu starten
 
-
-
     def start_csv_timer(self):
-        Timer(10.0, self.write_to_csv).start()  # Alle 5 Minuten
-
+        Timer(10.0, self.write_to_csv).start()  # Alle 10 Sekunden
 
 def main():
     logger = MqttLogger()
@@ -89,7 +90,6 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         print("Beende MQTT-Logger.")
-
 
 if __name__ == '__main__':
     main()
