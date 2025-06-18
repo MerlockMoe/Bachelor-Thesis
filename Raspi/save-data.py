@@ -21,7 +21,7 @@ class MqttLogger:
         self.topic_list = set()
 
         # Verzeichnis für Logdateien definieren
-        self.log_dir = "/logs"  # Pfad anpassen
+        self.log_dir = os.path.expanduser("~/logs")  # Pfad anpassen
         os.makedirs(self.log_dir, exist_ok=True)
 
         # Dateiname basierend auf aktuellem Tag
