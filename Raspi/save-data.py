@@ -74,7 +74,7 @@ class MqttLogger:
 
             print(f"Messreihe um {timestamp_id} in {self.filename} gespeichert.")
 
-    self.start_csv_timer()  # Timer neu starten
+        self.start_csv_timer()  # Timer neu starten
 
 
 
