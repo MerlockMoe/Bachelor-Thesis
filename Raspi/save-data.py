@@ -62,6 +62,7 @@ class MqttLogger:
             with open(self.filename, mode='a', newline='') as csv_file:
                 writer = csv.writer(csv_file)
 
+                # Header wird nur einmal geschrieben, wenn die Datei neu ist
                 if is_new_file:
                     header = ["id"] + topics
                     writer.writerow(header)
@@ -72,6 +73,7 @@ class MqttLogger:
             print(f"Messreihe um {timestamp_id} in {self.filename} gespeichert.")
 
         self.start_csv_timer()  # Timer neu starten
+
 
     def start_csv_timer(self):
         Timer(300.0, self.write_to_csv).start()  # Alle 5 Minuten
