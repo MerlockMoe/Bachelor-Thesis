@@ -51,6 +51,7 @@ class MqttLogger:
         self.topic_list.add(topic)
 
     def write_to_csv(self):
+        print("write_to_csv wird aufgerufen")  # Debugging-Ausgabe
         if not self.latest_messages:
             print("Keine Nachrichten zum Schreiben vorhanden.")
         else:
@@ -73,7 +74,8 @@ class MqttLogger:
 
             print(f"Messreihe um {timestamp_id} in {self.filename} gespeichert.")
 
-        self.start_csv_timer()  # Timer neu starten
+    self.start_csv_timer()  # Timer neu starten
+
 
 
     def start_csv_timer(self):
