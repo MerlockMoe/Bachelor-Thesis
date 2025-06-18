@@ -4,7 +4,7 @@ from PIL import Image
 
 # Parameter
 WIDTH, HEIGHT = 320, 240
-INPUT_DIR  = "/home/joe/esp_images"
+INPUT_DIR  = "/home/joe/esp_images" 
 RAW_EXT    = ".raw"
 OUT_EXT    = ".png"
 

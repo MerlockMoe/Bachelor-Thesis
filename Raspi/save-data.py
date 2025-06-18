@@ -74,7 +74,7 @@ class MqttLogger:
         self.start_csv_timer()  # Timer neu starten
 
     def start_csv_timer(self):
-        Timer(120.0, self.write_to_csv).start()  # Alle 2 Minuten
+        Timer(300.0, self.write_to_csv).start()  # Alle 5 Minuten
 
 
 def main():
