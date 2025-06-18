@@ -58,7 +58,7 @@ class MqttLogger:
             is_new_file = not os.path.isfile(self.filename) or os.stat(self.filename).st_size == 0
             timestamp_id = datetime.now().strftime('%d-%H-%M')
 
-            # Filtere Topics und entferne alle "waterLow"-Daten
+            # Filtere Topics und entferne alle "waterLow"-Daten direkt beim Speichern
             filtered_topics = [topic for topic in self.topic_list if "waterLow" not in topic]
             filtered_messages = {topic: self.latest_messages.get(topic, "") for topic in filtered_topics}
 
