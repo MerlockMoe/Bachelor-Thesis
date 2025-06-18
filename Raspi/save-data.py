@@ -44,6 +44,7 @@ class MqttLogger:
         self.client.subscribe("#")  # Alle Topics abonnieren
 
     def on_message(self, client, userdata, msg):
+        print(f"Nachricht empfangen: Topic = {msg.topic}, Payload = {msg.payload}")
         topic = msg.topic
         payload = msg.payload.decode(errors='replace')
         self.latest_messages[topic] = payload
