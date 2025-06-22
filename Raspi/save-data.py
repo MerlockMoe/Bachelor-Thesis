@@ -20,20 +20,16 @@ class MqttLogger:
         self.latest_messages = {}   # Speichert letzte Nachricht je Topic
         self.topic_list = set()
 
-        # Verzeichnis für Logdateien definieren
         self.log_dir = os.path.expanduser("~/logs")
         os.makedirs(self.log_dir, exist_ok=True)
 
-        # Dateiname basierend auf aktuellem Tag
         self.date_str = datetime.now().strftime('%Y%m%d')
         self.filename = os.path.join(self.log_dir, f"mqtt_log_{self.date_str}.csv")
 
-        # Datei anlegen, falls sie noch nicht existiert
         if not os.path.isfile(self.filename):
             with open(self.filename, mode='w', newline='') as csv_file:
                 pass  # Header wird beim ersten Logeintrag dynamisch geschrieben
 
-        # Topics für den Capture-Befehl
         self.capture_topics = [
             "esp32/camV1/cmd",
             "esp32/camV2/cmd",
@@ -44,65 +40,58 @@ class MqttLogger:
         self.client.connect(MQTT_BROKER, MQTT_PORT, 60)
         self.client.loop_start()
 
-        # Timer zum regelmäßigen Schreiben in CSV
         self.start_csv_timer()
 
     def on_connect(self, client, userdata, flags, rc):
         print("Verbunden mit MQTT-Broker. Starte Wildcard-Abonnement.")
-        self.client.subscribe("#")  # Alle Topics abonnieren
+        self.client.subscribe("#")
 
     def on_message(self, client, userdata, msg):
-        print(f"Nachricht empfangen: Topic = {msg.topic}, Payload = {msg.payload}")
         topic = msg.topic
         payload = msg.payload.decode(errors='replace')
         self.latest_messages[topic] = payload
         self.topic_list.add(topic)
 
     def publish_to(self, topic: str):
-        """Publishes a single 'capture' command to the given topic."""
         self.client.publish(topic, "capture")
         print(f"Nachricht 'capture' gesendet an {topic}")
 
     def send_capture(self):
-        """
-        Sendet asynchron und mit 2-Sekunden-Abständen
-        den 'capture'-Befehl an alle Kamera-Topics.
-        """
-        for index, topic in enumerate(self.capture_topics):
-            # Timer startet jeweils nach index*2 Sekunden
-            Timer(2 * index, self.publish_to, args=(topic,)).start()
+        for idx, topic in enumerate(self.capture_topics):
+            Timer(2 * idx, self.publish_to, args=(topic,)).start()
 
     def write_to_csv(self):
         print("write_to_csv wird aufgerufen")
         if not self.latest_messages:
             print("Keine Nachrichten zum Schreiben vorhanden.")
         else:
-            is_new_file = not os.path.isfile(self.filename) or os.stat(self.filename).st_size == 0
+            is_new = not os.path.isfile(self.filename) or os.stat(self.filename).st_size == 0
             timestamp_id = datetime.now().strftime('%d-%H-%M')
 
-            # Filter: keine waterLow-Topics speichern
-            filtered_topics = [t for t in self.topic_list if "waterLow" not in t]
+            # Nur Topics, die mit V1/, V2/, V3/ oder V4/ beginnen; ohne "waterLow"
+            filtered_topics = [
+                t for t in self.topic_list
+                if any(t.startswith(f"V{n}/") for n in range(1,5))
+                   and "waterLow" not in t
+            ]
             filtered_topics.sort()
+
             filtered_messages = {t: self.latest_messages.get(t, "") for t in filtered_topics}
 
             with open(self.filename, mode='a', newline='') as csv_file:
                 writer = csv.writer(csv_file)
-                if is_new_file:
+                if is_new:
                     header = ["id"] + filtered_topics
                     writer.writerow(header)
-                row = [timestamp_id] + [filtered_messages.get(t, "") for t in filtered_topics]
+                row = [timestamp_id] + [filtered_messages[t] for t in filtered_topics]
                 writer.writerow(row)
 
             print(f"Messreihe um {timestamp_id} in {self.filename} gespeichert.")
-
-            # Sofort Capture-Sequenz starten (asynchron mit Abständen)
             self.send_capture()
 
-        # Timer für nächste Speicherung neu starten
         self.start_csv_timer()
 
     def start_csv_timer(self):
-        # Alle 5 Minuten CSV schreiben (300 Sekunden)
         Timer(300.0, self.write_to_csv).start()
 
 def main():
