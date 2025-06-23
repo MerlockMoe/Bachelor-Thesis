@@ -66,7 +66,7 @@ class MqttLogger:
             print("Keine Nachrichten zum Schreiben vorhanden.")
         else:
             is_new = not os.path.isfile(self.filename) or os.stat(self.filename).st_size == 0
-            timestamp_id = datetime.now().strftime('%d-%H-%M')
+            timestamp_id = datetime.now().strftime('%m-%d-%H-%M')
 
             # Nur Topics, die mit V1/, V2/, V3/ oder V4/ beginnen; ohne "waterLow"
             filtered_topics = [
