@@ -13,7 +13,7 @@ COMMAND_TOPIC = "HW-888/command"
 # pH-Schwellenwerte
 PH_HIGH = 5.5
 PH_LOW = 5
-PH_DURATION_THRESHOLD = 20  # 10 Minuten in Sekunden
+PH_DURATION_THRESHOLD = 600  # 10 Minuten in Sekunden
 PH_COOLDOWN = 1 * 60  # 20 Minuten in Sekunden
 
 # Speichert pH-Verlauf je Versuch
@@ -21,6 +21,7 @@ ph_history = {
     f"{MQTT_TOPIC_PREFIX}{i}/pH": deque(maxlen=PH_DURATION_THRESHOLD) for i in range(1, 5)
 }
 last_action_time = defaultdict(lambda: 0)
+adjustment_count = defaultdict(lambda: {"phDown": 0, "phUp": 0})  # Zähler für Anpassungen
 
 client = mqtt.Client()
 
@@ -58,11 +59,15 @@ def on_message(client, userdata, msg):
             print(f"{versuch}: pH > {PH_HIGH} seit 10min -> sende phdown-Sequenz")
             run_sequence(versuch, direction="down")
             last_action_time[versuch] = now
+            adjustment_count[versuch]["phDown"] += 1  # Inkrementiere phDown Zähler
+            publish_adjustment_count(versuch, "phDown")
 
         elif avg < PH_LOW:
             print(f"{versuch}: pH < {PH_LOW} seit 10min -> sende phup-Sequenz")
             run_sequence(versuch, direction="up")
             last_action_time[versuch] = now
+            adjustment_count[versuch]["phUp"] += 1  # Inkrementiere phUp Zähler
+            publish_adjustment_count(versuch, "phUp")
 
 def run_sequence(versuch, direction="down"):
     valve_open = f"{versuch.lower()}valveopen"
@@ -85,6 +90,13 @@ def run_sequence(versuch, direction="down"):
 
     client.publish(COMMAND_TOPIC, valve_close)
     client.loop_write()
+
+def publish_adjustment_count(versuch, direction):
+    """Sendet den Zähler für Anpassungen an das jeweilige Sub-Topic."""
+    subtopic = f"{versuch}/ph{direction.capitalize()}"
+    count = adjustment_count[versuch][direction]
+    client.publish(f"{versuch}/{subtopic}", count)
+    print(f"{versuch}/{subtopic}: Anpassungszähler = {count}")
 
 client.on_connect = on_connect
 client.on_message = on_message
