@@ -11,10 +11,10 @@ MQTT_TOPIC_PREFIX = "V"
 COMMAND_TOPIC = "HW-888/command"
 
 # pH-Schwellenwerte
-PH_HIGH = 5.5
-PH_LOW = 5
-PH_DURATION_THRESHOLD = 600  # 10 Minuten in Sekunden
-PH_COOLDOWN = 1 * 60  # 20 Minuten in Sekunden
+PH_HIGH = 6
+PH_LOW = 5.5
+PH_DURATION_THRESHOLD = 10 * 60  # 10 Minuten in Sekunden
+PH_COOLDOWN = 20 * 60  # 20 Minuten in Sekunden
 
 # Speichert pH-Verlauf je Versuch
 ph_history = {
