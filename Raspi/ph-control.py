@@ -13,8 +13,8 @@ COMMAND_TOPIC = "HW-888/command"
 # pH-Schwellenwerte
 PH_HIGH = 6
 PH_LOW = 5.5
-PH_DURATION_THRESHOLD = 5 * 60  # 5 Minuten in Sekunden
-PH_COOLDOWN = 10 * 60  # 10 Minuten in Sekunden
+PH_DURATION_THRESHOLD = 60 * 60  # 5 Minuten in Sekunden
+PH_COOLDOWN = 60 * 60  # 10 Minuten in Sekunden
 
 # Speichert pH-Verlauf je Versuch
 ph_history = {
