@@ -13,8 +13,8 @@ COMMAND_TOPIC = "HW-888/command"
 # pH-Schwellenwerte
 PH_HIGH = 6
 PH_LOW = 5.5
-PH_DURATION_THRESHOLD = 1 * 60  # 60 Minuten in Sekunden
-PH_COOLDOWN = 1 * 60  # 60 Minuten in Sekunden
+PH_DURATION_THRESHOLD = 60 * 60  # 60 Minuten in Sekunden
+PH_COOLDOWN = 60 * 60  # 60 Minuten in Sekunden
 
 # Speichert pH-Verlauf je Versuch
 ph_history = {
@@ -44,9 +44,9 @@ def on_message(client, userdata, msg):
     ph_history[topic].append((now, ph_value))
     recent = [v for t, v in ph_history[topic] if now - t <= PH_DURATION_THRESHOLD]
 
-    versuch = topic.split("/")[0]  # z.B. V1
+    versuch = topic.split("/")[0]
     if now - last_action_time[versuch] < PH_COOLDOWN:
-        return  # Cooldown aktiv
+        return
 
     if len(recent) >= PH_DURATION_THRESHOLD:
         avg = sum(recent) / len(recent)
@@ -71,10 +71,14 @@ def run_sequence(versuch, direction="down"):
     client.loop_write()
     time.sleep(5)
 
-    # pH-Anpassung zweimal mit 5s Verzögerung senden
-    cmd = "phdown" if direction == "down" else "phup"
-    for _ in range(2):
-        client.publish(COMMAND_TOPIC, cmd)
+    # pH-Anpassung: phdown zweimal, phup einmal
+    if direction == "down":
+        for _ in range(2):
+            client.publish(COMMAND_TOPIC, "phdown")
+            client.loop_write()
+            time.sleep(5)
+    else:
+        client.publish(COMMAND_TOPIC, "phup")
         client.loop_write()
         time.sleep(5)
 
