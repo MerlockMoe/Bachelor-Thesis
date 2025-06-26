@@ -72,11 +72,11 @@ def run_sequence(versuch, direction="down"):
 
     if direction == "down":
         client.publish(COMMAND_TOPIC, "phdown")
-        time.sleep(3)
+        time.sleep(5)
         client.publish(COMMAND_TOPIC, "phdown")
     else:
         client.publish(COMMAND_TOPIC, "phup")
-        time.sleep(3)
+        time.sleep(5)
         client.publish(COMMAND_TOPIC, "phup")
     client.loop_write()
     time.sleep(5)
