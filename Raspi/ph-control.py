@@ -13,8 +13,8 @@ COMMAND_TOPIC = "HW-888/command"
 # pH-Schwellenwerte
 PH_HIGH = 6
 PH_LOW = 5.5
-PH_DURATION_THRESHOLD = 1 * 60  # 60 Minuten in Sekunden
-PH_COOLDOWN = 2 * 60  # 60 Minuten in Sekunden
+PH_DURATION_THRESHOLD = 60 * 60  # 60 Minuten in Sekunden
+PH_COOLDOWN = 60 * 60  # 60 Minuten in Sekunden
 
 # Speichert pH-Verlauf je Versuch
 ph_history = {
@@ -64,27 +64,26 @@ def on_message(client, userdata, msg):
             publish_adjustment_count(versuch, "up")
 
 def run_sequence(versuch, direction="down"):
+    # Ventil öffnen
     valve_open = f"{versuch.lower()}valveopen"
     valve_close = f"{versuch.lower()}valveclose"
     client.publish(COMMAND_TOPIC, valve_open)
     client.loop_write()
     time.sleep(5)
 
-    if direction == "down":
-        client.publish(COMMAND_TOPIC, "phdown")
+    # pH-Anpassung zweimal mit 5s Verzögerung senden
+    cmd = "phdown" if direction == "down" else "phup"
+    for _ in range(2):
+        client.publish(COMMAND_TOPIC, cmd)
+        client.loop_write()
         time.sleep(5)
-        client.publish(COMMAND_TOPIC, "phdown")
-    else:
-        client.publish(COMMAND_TOPIC, "phup")
-        time.sleep(5)
-        client.publish(COMMAND_TOPIC, "phup")
-    client.loop_write()
-    time.sleep(5)
 
+    # Nachspülen
     client.publish(COMMAND_TOPIC, "water")
     client.loop_write()
     time.sleep(15)
 
+    # Ventil schließen
     client.publish(COMMAND_TOPIC, valve_close)
     client.loop_write()
 
