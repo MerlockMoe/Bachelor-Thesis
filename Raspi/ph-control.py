@@ -11,18 +11,18 @@ MQTT_TOPIC_PREFIX = "V"
 COMMAND_TOPIC = "HW-888/command"
 
 # pH-Schwellenwerte
-PH_HIGH = 6
+PH_HIGH = 6.0
 PH_LOW = 5.5
-PH_DURATION_THRESHOLD = 60 * 60  # 60 Minuten in Sekunden
-PH_COOLDOWN = 60 * 60  # 60 Minuten in Sekunden
+PH_DURATION_THRESHOLD = 10 * 60  # Fenstergröße in Sekunden, über die gemittelt wird
+PH_COOLDOWN = 60 * 60            # Cooldown in Sekunden nach einer Anpassung
 
-# Speichert pH-Verlauf je Versuch
+# Speichert (Timestamp, Wert)-Paar im Zeitfenster
 ph_history = {
-    f"{MQTT_TOPIC_PREFIX}{i}/pH": deque(maxlen=PH_DURATION_THRESHOLD)
+    f"{MQTT_TOPIC_PREFIX}{i}/pH": deque(maxlen=10000)  # Puffer groß genug, um alle Messungen aufzunehmen
     for i in range(1, 5)
 }
 last_action_time = defaultdict(lambda: 0)
-adjustment_count = defaultdict(lambda: {"phDown": 0, "phUp": 0})  # Zähler für Anpassungen
+adjustment_count = defaultdict(lambda: {"phDown": 0, "phUp": 0})
 
 client = mqtt.Client()
 client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
@@ -38,40 +38,48 @@ def on_message(client, userdata, msg):
     try:
         ph_value = float(msg.payload.decode())
     except ValueError:
-        return
+        return  # Ungültiger Wert
 
     now = time.time()
     ph_history[topic].append((now, ph_value))
-    recent = [v for t, v in ph_history[topic] if now - t <= PH_DURATION_THRESHOLD]
 
+    # Einträge im aktuellen Zeitfenster
+    recent = [(t, v) for t, v in ph_history[topic] if now - t <= PH_DURATION_THRESHOLD]
+
+    # Prüfen, ob wir volle Fenstergröße abgedeckt haben
+    earliest_time = ph_history[topic][0][0] if ph_history[topic] else now
+    if now - earliest_time < PH_DURATION_THRESHOLD:
+        return  # Noch nicht genug Daten gesammelt
+
+    # Cooldown prüfen
     versuch = topic.split("/")[0]
     if now - last_action_time[versuch] < PH_COOLDOWN:
         return
 
-    if len(recent) >= PH_DURATION_THRESHOLD:
-        avg = sum(recent) / len(recent)
-        if avg > PH_HIGH:
-            print(f"{versuch}: pH > {PH_HIGH} seit 60min → sende phdown-Sequenz")
-            run_sequence(versuch, direction="down")
-            last_action_time[versuch] = now
-            adjustment_count[versuch]["phDown"] += 1
-            publish_adjustment_count(versuch, "down")
-        elif avg < PH_LOW:
-            print(f"{versuch}: pH < {PH_LOW} seit 60min → sende phup-Sequenz")
-            run_sequence(versuch, direction="up")
-            last_action_time[versuch] = now
-            adjustment_count[versuch]["phUp"] += 1
-            publish_adjustment_count(versuch, "up")
+    # Durchschnitt berechnen und ggf. anpassen
+    values = [v for t, v in recent]
+    avg = sum(values) / len(values)
+    if avg > PH_HIGH:
+        print(f"{versuch}: pH > {PH_HIGH} im Fenster → phdown")
+        run_sequence(versuch, direction="down")
+        adjustment_count[versuch]["phDown"] += 1
+        publish_adjustment_count(versuch, "down")
+        last_action_time[versuch] = now
+    elif avg < PH_LOW:
+        print(f"{versuch}: pH < {PH_LOW} im Fenster → phup")
+        run_sequence(versuch, direction="up")
+        adjustment_count[versuch]["phUp"] += 1
+        publish_adjustment_count(versuch, "up")
+        last_action_time[versuch] = now
 
 def run_sequence(versuch, direction="down"):
-    # Ventil öffnen
     valve_open = f"{versuch.lower()}valveopen"
     valve_close = f"{versuch.lower()}valveclose"
     client.publish(COMMAND_TOPIC, valve_open)
     client.loop_write()
     time.sleep(5)
 
-    # pH-Anpassung: phdown zweimal, phup einmal
+    # phdown zweimal, phup einmal
     if direction == "down":
         for _ in range(2):
             client.publish(COMMAND_TOPIC, "phdown")
@@ -82,25 +90,20 @@ def run_sequence(versuch, direction="down"):
         client.loop_write()
         time.sleep(5)
 
-    # Nachspülen
     client.publish(COMMAND_TOPIC, "water")
     client.loop_write()
     time.sleep(15)
-
-    # Ventil schließen
     client.publish(COMMAND_TOPIC, valve_close)
     client.loop_write()
 
 def publish_adjustment_count(versuch, direction):
-    """Sendet den Zähler für Anpassungen an das jeweilige Sub-Topic."""
     subtopic = f"{versuch}/ph{direction}"
     key = f"ph{direction.capitalize()}"
     count = adjustment_count[versuch][key]
     client.publish(subtopic, count)
-    print(f"{subtopic}: Anpassungszähler = {count}")
+    print(f"{subtopic}: {count}")
 
 client.on_connect = on_connect
 client.on_message = on_message
-
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
 client.loop_forever()
