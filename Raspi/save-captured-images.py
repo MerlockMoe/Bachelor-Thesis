@@ -3,6 +3,8 @@
 import paho.mqtt.client as mqtt
 import os
 import datetime
+import logging
+import ntplib  # Bibliothek für NTP-Zeitabfrage
 
 # MQTT-Broker-Konfiguration
 BROKER   = "192.168.0.120"
@@ -22,11 +24,22 @@ expected_lengths = {}
 
 # Hilfsfunktion: Extrahiere Kamera-ID und Nachrichtentyp aus Topic
 def parse_topic(topic):
-    # Format erwartet: esp32/<camera_id>/<msg_type>
     parts = topic.split('/')
     if len(parts) < 3:
         return None, None
     return parts[1], parts[2]
+
+# Hilfsfunktion: Aktuelle Stunde von NTP-Server holen
+def get_current_hour():
+    try:
+        ntp = ntplib.NTPClient()
+        resp = ntp.request('pool.ntp.org', version=3)
+        utc_dt = datetime.datetime.fromtimestamp(resp.tx_time)
+        return utc_dt.hour
+    except Exception as e:
+        logging.error(f"NTP-Zeitabfrage fehlgeschlagen: {e}")
+        # Fallback auf lokale Zeit
+        return datetime.datetime.now().hour
 
 # Callback bei erfolgreicher Verbindung
 def on_connect(client, userdata, flags, rc):
@@ -54,22 +67,30 @@ def on_message(client, userdata, msg):
         expected = expected_lengths.get(camera_id, 0)
         print(f"[{camera_id}] DATA: {received}/{expected} Bytes")
     elif msg_type == "end":
-        data = buffers.get(camera_id, bytearray())
-        expected = expected_lengths.get(camera_id, 0)
-        if len(data) == expected:
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = os.path.join(save_dir, f"{camera_id}_{ts}.jpg")
-            with open(filename, 'wb') as f:
-                f.write(data)
-            print(f"[{camera_id}] Bild gespeichert: {filename}")
+        # Nur speichern, wenn aktuelle Uhrzeit außerhalb 00:00–06:00
+        hour = get_current_hour()
+        if 0 <= hour < 6:
+            print(f"[{camera_id}] Aufnahme zwischen 00:00–06:00 (Stunde {hour}) übersprungen.")
         else:
-            print(f"[{camera_id}] Unvollständig: {len(data)}/{expected} Bytes")
+            data = buffers.get(camera_id, bytearray())
+            expected = expected_lengths.get(camera_id, 0)
+            if len(data) == expected:
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = os.path.join(save_dir, f"{camera_id}_{ts}.jpg")
+                with open(filename, 'wb') as f:
+                    f.write(data)
+                print(f"[{camera_id}] Bild gespeichert: {filename}")
+            else:
+                print(f"[{camera_id}] Unvollständig: {len(data)}/{expected} Bytes")
         # Aufräumen
         buffers.pop(camera_id, None)
         expected_lengths.pop(camera_id, None)
 
 # Hauptprogramm
 if __name__ == '__main__':
+    # Logging konfigurieren
+    logging.basicConfig(level=logging.INFO)
+
     client = mqtt.Client()
     client.username_pw_set(USER, PASSWORD)
     client.on_connect = on_connect
