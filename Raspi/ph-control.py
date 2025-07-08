@@ -69,7 +69,7 @@ client = mqtt.Client()
 client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
 
 # Verbindung: Topics abonnieren und initiale Zähler publishen
- def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, rc):
     print("Verbunden mit MQTT-Broker")
     # Subscribe alle pH-Topics
     for topic in ph_history:
@@ -78,12 +78,12 @@ client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
     # Publish geladene Zähler
     for versuch, vals in adjustment_count.items():
         client.publish(f"{versuch}/phdown", vals.get("phDown", 0))
-        client.publish(f"{versuch}/phpup", vals.get("phUp", 0))
+        client.publish(f"{versuch}/phup", vals.get("phUp", 0))
         print(f"Initial publish {versuch}/phdown = {vals.get('phDown',0)}")
         print(f"Initial publish {versuch}/phup = {vals.get('phUp',0)}")
 
 # Nachricht: Wert speichern und ggf. Action auslösen
- def on_message(client, userdata, msg):
+def on_message(client, userdata, msg):
     topic = msg.topic
     try:
         ph_value = float(msg.payload.decode())
@@ -94,7 +94,7 @@ client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
     ph_history[topic].append((now, ph_value))
 
     # Werte im aktuellen Fenster
-    recent = [(t, v) for t, v in ph_history[topic] if now - t <= PH_DURATION_THRESHOLD]
+    recent = [v for t, v in ph_history[topic] if now - t <= PH_DURATION_THRESHOLD]
     # Prüfen, ob Fenster voll ist
     if not ph_history[topic] or now - ph_history[topic][0][0] < PH_DURATION_THRESHOLD:
         return
@@ -105,8 +105,7 @@ client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
         return
 
     # Durchschnitts-pH berechnen
-    values = [v for _, v in recent]
-    avg = sum(values) / len(values)
+    avg = sum(recent) / len(recent)
     if avg > PH_HIGH:
         print(f"{versuch}: pH > {PH_HIGH} → phdown")
         run_sequence(versuch, "down")
@@ -121,7 +120,7 @@ client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
         last_action_time[versuch] = now
 
 # Ausführungssequenz für Ventil und pH-Regulierung
- def run_sequence(versuch, direction="down"):
+def run_sequence(versuch, direction="down"):
     valve_open = f"{versuch.lower()}valveopen"
     valve_close = f"{versuch.lower()}valveclose"
     client.publish(COMMAND_TOPIC, valve_open)
@@ -129,6 +128,7 @@ client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
     time.sleep(5)
 
     if direction == "down":
+        # phdown zweimal mit 5s Pause
         for _ in range(2):
             client.publish(COMMAND_TOPIC, "phdown")
             client.loop_write()
@@ -138,17 +138,19 @@ client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
         client.loop_write()
         time.sleep(5)
 
+    # Spülen
     client.publish(COMMAND_TOPIC, "water")
     client.loop_write()
     time.sleep(15)
+
+    # Ventil schließen
     client.publish(COMMAND_TOPIC, valve_close)
     client.loop_write()
 
 # Zähler publizieren
- def publish_adjustment_count(versuch, direction):
+def publish_adjustment_count(versuch, direction):
     subtopic = f"{versuch}/ph{direction}"
-    key = f"ph{direction.capitalize()}"
-    count = adjustment_count[versuch][key]
+    count = adjustment_count[versuch][f"ph{direction.capitalize()}"]
     client.publish(subtopic, count)
     print(f"{subtopic}: {count}")
 
