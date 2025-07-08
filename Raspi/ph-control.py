@@ -1,3 +1,6 @@
+import os
+import glob
+import csv
 import time
 import paho.mqtt.client as mqtt
 from collections import deque, defaultdict
@@ -13,64 +16,102 @@ COMMAND_TOPIC = "HW-888/command"
 # pH-Schwellenwerte
 PH_HIGH = 6.0
 PH_LOW = 5.5
-PH_DURATION_THRESHOLD = 10 * 60  # Fenstergröße in Sekunden, über die gemittelt wird
+PH_DURATION_THRESHOLD = 60 * 60  # Fenstergröße in Sekunden, über die gemittelt wird
 PH_COOLDOWN = 60 * 60            # Cooldown in Sekunden nach einer Anpassung
+
+# Logs-Verzeichnis (für CSV-Dateien)
+LOG_DIR = os.path.expanduser("~/logs")
+CSV_PATTERN = os.path.join(LOG_DIR, "mqtt_log_*.csv")
+
+# Hilfsfunktion: Lädt letzte Anpassungszähler aus der neuesten CSV
+def load_adjustment_counts():
+    counts = {}
+    files = glob.glob(CSV_PATTERN)
+    if not files:
+        return counts
+    latest = max(files, key=os.path.getmtime)
+    try:
+        with open(latest, newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            rows = list(reader)
+            if not rows:
+                return counts
+            last = rows[-1]
+            for i in range(1, 5):
+                key = f"V{i}"
+                down_col = f"V{i}/phdown"
+                up_col = f"V{i}/phup"
+                down_val = last.get(down_col, "0") or "0"
+                up_val = last.get(up_col, "0") or "0"
+                try:
+                    counts[key] = {"phDown": int(down_val), "phUp": int(up_val)}
+                except ValueError:
+                    counts[key] = {"phDown": 0, "phUp": 0}
+    except Exception:
+        pass
+    return counts
+
+# Lade initiale Zähler (oder verwende 0)
+loaded_counts = load_adjustment_counts()
+adjustment_count = defaultdict(lambda: {"phDown": 0, "phUp": 0})
+for versuch, vals in loaded_counts.items():
+    adjustment_count[versuch] = vals
 
 # Speichert (Timestamp, Wert)-Paar im Zeitfenster
 ph_history = {
-    f"{MQTT_TOPIC_PREFIX}{i}/pH": deque(maxlen=10000)  # Puffer groß genug, um alle Messungen aufzunehmen
+    f"{MQTT_TOPIC_PREFIX}{i}/pH": deque(maxlen=10000)
     for i in range(1, 5)
 }
 last_action_time = defaultdict(lambda: 0)
-adjustment_count = defaultdict(lambda: {"phDown": 0, "phUp": 0})
 
 client = mqtt.Client()
 client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+
+# MQTT-Callbacks
 
 def on_connect(client, userdata, flags, rc):
     print("Verbunden mit MQTT-Broker")
     for topic in ph_history.keys():
         client.subscribe(topic)
-        print(f"Abonniert: {topic}")
 
 def on_message(client, userdata, msg):
     topic = msg.topic
     try:
         ph_value = float(msg.payload.decode())
     except ValueError:
-        return  # Ungültiger Wert
+        return
 
     now = time.time()
     ph_history[topic].append((now, ph_value))
 
-    # Einträge im aktuellen Zeitfenster
+    # Filtern des aktuellen Fensters
     recent = [(t, v) for t, v in ph_history[topic] if now - t <= PH_DURATION_THRESHOLD]
 
-    # Prüfen, ob wir volle Fenstergröße abgedeckt haben
+    # Prüfen, ob volles Zeitfenster erreicht
     earliest_time = ph_history[topic][0][0] if ph_history[topic] else now
     if now - earliest_time < PH_DURATION_THRESHOLD:
-        return  # Noch nicht genug Daten gesammelt
+        return
 
     # Cooldown prüfen
     versuch = topic.split("/")[0]
     if now - last_action_time[versuch] < PH_COOLDOWN:
         return
 
-    # Durchschnitt berechnen und ggf. anpassen
+    # Durchschnitt berechnen
     values = [v for t, v in recent]
     avg = sum(values) / len(values)
     if avg > PH_HIGH:
-        print(f"{versuch}: pH > {PH_HIGH} im Fenster → phdown")
         run_sequence(versuch, direction="down")
         adjustment_count[versuch]["phDown"] += 1
         publish_adjustment_count(versuch, "down")
         last_action_time[versuch] = now
     elif avg < PH_LOW:
-        print(f"{versuch}: pH < {PH_LOW} im Fenster → phup")
         run_sequence(versuch, direction="up")
         adjustment_count[versuch]["phUp"] += 1
         publish_adjustment_count(versuch, "up")
         last_action_time[versuch] = now
+
+# Aktionssequenz
 
 def run_sequence(versuch, direction="down"):
     valve_open = f"{versuch.lower()}valveopen"
@@ -79,7 +120,6 @@ def run_sequence(versuch, direction="down"):
     client.loop_write()
     time.sleep(5)
 
-    # phdown zweimal, phup einmal
     if direction == "down":
         for _ in range(2):
             client.publish(COMMAND_TOPIC, "phdown")
@@ -96,6 +136,8 @@ def run_sequence(versuch, direction="down"):
     client.publish(COMMAND_TOPIC, valve_close)
     client.loop_write()
 
+# Zähler publizieren
+
 def publish_adjustment_count(versuch, direction):
     subtopic = f"{versuch}/ph{direction}"
     key = f"ph{direction.capitalize()}"
@@ -103,6 +145,7 @@ def publish_adjustment_count(versuch, direction):
     client.publish(subtopic, count)
     print(f"{subtopic}: {count}")
 
+# Hauptskript starten
 client.on_connect = on_connect
 client.on_message = on_message
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
