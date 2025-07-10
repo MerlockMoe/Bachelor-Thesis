@@ -2,6 +2,7 @@ import os
 import glob
 import csv
 import time
+import math
 import paho.mqtt.client as mqtt
 from collections import deque, defaultdict
 
@@ -13,17 +14,17 @@ MQTT_PASSWORD = "1337"
 MQTT_TOPIC_PREFIX = "V"
 COMMAND_TOPIC = "HW-888/command"
 
-# pH-Schwellenwerte
-PH_HIGH = 6.0
-PH_LOW = 5.5
-PH_DURATION_THRESHOLD = 60 * 60  # Fenstergröße in Sekunden
-PH_COOLDOWN = 60 * 60            # Cooldown nach einer Anpassung in Sekunden
+# Regler-Parameter
+PH_LOW = 5.5                   # Untere Grenze des Sollbereichs
+PH_HIGH = 6.0                  # Obere Grenze des Sollbereichs
+PULSE_STEP = 0.3               # Abweichung pro Puls
+PH_DURATION_THRESHOLD = 60 * 60  # Fenstergröße in Sekunden für Mittelwert
+PH_COOLDOWN = 60 * 60            # Cooldown nach Anpassung in Sekunden
 
-# Logs-Verzeichnis zum Laden der Zähler
+# Zähler aus CSV laden
 LOG_DIR = os.path.expanduser("~/logs")
 CSV_PATTERN = os.path.join(LOG_DIR, "mqtt_log_*.csv")
 
-# Hilfsfunktion: Lädt letzte Anpassungszähler aus der neuesten CSV
 def load_adjustment_counts():
     counts = {}
     files = glob.glob(CSV_PATTERN)
@@ -31,130 +32,114 @@ def load_adjustment_counts():
         return counts
     latest = max(files, key=os.path.getmtime)
     try:
-        with open(latest, newline='') as csvfile:
-            reader = csv.DictReader(csvfile)
+        with open(latest, newline='') as f:
+            reader = csv.DictReader(f)
             rows = list(reader)
             if not rows:
                 return counts
             last = rows[-1]
             for i in range(1, 5):
                 key = f"V{i}"
-                down_col = f"V{i}/phdown"
-                up_col = f"V{i}/phup"
-                down_val = last.get(down_col, "0") or "0"
-                up_val = last.get(up_col, "0") or "0"
-                try:
-                    counts[key] = {"phDown": int(down_val), "phUp": int(up_val)}
-                except ValueError:
-                    counts[key] = {"phDown": 0, "phUp": 0}
+                down = int(last.get(f"V{i}/phdown", "0") or 0)
+                up   = int(last.get(f"V{i}/phup",   "0") or 0)
+                counts[key] = {"phDown": down, "phUp": up}
     except Exception:
         pass
     return counts
 
-# Initiale Zähler laden
+# Initiale Zähler laden und setzen
 loaded_counts = load_adjustment_counts()
 adjustment_count = defaultdict(lambda: {"phDown": 0, "phUp": 0})
-for versuch, vals in loaded_counts.items():
-    adjustment_count[versuch] = vals
+for v, vals in loaded_counts.items():
+    adjustment_count[v] = vals
 
-# Puffer für Messwerte (Timestamp, Wert)
-ph_history = {
-    f"{MQTT_TOPIC_PREFIX}{i}/pH": deque(maxlen=10000)
-    for i in range(1, 5)
-}
+# Puffer für pH-Messwerte
+ph_history = {f"{MQTT_TOPIC_PREFIX}{i}/pH": deque(maxlen=10000) for i in range(1, 5)}
 last_action_time = defaultdict(lambda: 0)
 
-# MQTT-Client konfigurieren
+# MQTT-Client einrichten
 client = mqtt.Client()
 client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
 
-# Verbindung: Topics abonnieren und initiale Zähler publishen
-def on_connect(client, userdata, flags, rc):
+# Initiale Zähler publishen
+def publish_initial_counts():
+    for v, vals in adjustment_count.items():
+        client.publish(f"{v}/phdown", vals["phDown"])
+        client.publish(f"{v}/phup",   vals["phUp"])
+
+# Callback bei Verbindung
+ def on_connect(client, userdata, flags, rc):
     print("Verbunden mit MQTT-Broker")
-    # Subscribe alle pH-Topics
     for topic in ph_history:
         client.subscribe(topic)
-        print(f"Abonniert: {topic}")
-    # Publish geladene Zähler
-    for versuch, vals in adjustment_count.items():
-        client.publish(f"{versuch}/phdown", vals.get("phDown", 0))
-        client.publish(f"{versuch}/phup", vals.get("phUp", 0))
-        print(f"Initial publish {versuch}/phdown = {vals.get('phDown',0)}")
-        print(f"Initial publish {versuch}/phup = {vals.get('phUp',0)}")
+    publish_initial_counts()
 
-# Nachricht: Wert speichern und ggf. Action auslösen
-def on_message(client, userdata, msg):
+# Callback bei eingehender Nachricht
+ def on_message(client, userdata, msg):
     topic = msg.topic
     try:
-        ph_value = float(msg.payload.decode())
+        ph = float(msg.payload.decode())
     except ValueError:
         return
-
     now = time.time()
-    ph_history[topic].append((now, ph_value))
+    ph_history[topic].append((now, ph))
 
-    # Werte im aktuellen Fenster
+    # Mittelwertbildung über definiertes Zeitfenster
     recent = [v for t, v in ph_history[topic] if now - t <= PH_DURATION_THRESHOLD]
     # Prüfen, ob Fenster voll ist
     if not ph_history[topic] or now - ph_history[topic][0][0] < PH_DURATION_THRESHOLD:
         return
+    v = topic.split('/')[0]
 
-    versuch = topic.split("/")[0]
-    # Cooldown
-    if now - last_action_time[versuch] < PH_COOLDOWN:
+    # Cooldown prüfen
+    if now - last_action_time[v] < PH_COOLDOWN:
         return
 
-    # Durchschnitts-pH berechnen
     avg = sum(recent) / len(recent)
-    if avg > PH_HIGH:
-        print(f"{versuch}: pH > {PH_HIGH} → phdown")
-        run_sequence(versuch, "down")
-        adjustment_count[versuch]["phDown"] += 1
-        publish_adjustment_count(versuch, "down")
-        last_action_time[versuch] = now
-    elif avg < PH_LOW:
-        print(f"{versuch}: pH < {PH_LOW} → phup")
-        run_sequence(versuch, "up")
-        adjustment_count[versuch]["phUp"] += 1
-        publish_adjustment_count(versuch, "up")
-        last_action_time[versuch] = now
+    # Prüfen, ob avg außerhalb des Sollbereichs
+    if PH_LOW <= avg <= PH_HIGH:
+        return  # Innerhalb des gewünschten Bereichs
 
-# Ausführungssequenz für Ventil und pH-Regulierung
-def run_sequence(versuch, direction="down"):
-    valve_open = f"{versuch.lower()}valveopen"
-    valve_close = f"{versuch.lower()}valveclose"
-    client.publish(COMMAND_TOPIC, valve_open)
-    client.loop_write()
-    time.sleep(5)
-
-    if direction == "down":
-        # phdown zweimal mit 5s Pause
-        for _ in range(2):
-            client.publish(COMMAND_TOPIC, "phdown")
-            client.loop_write()
-            time.sleep(5)
+    # Abweichung absolut bestimmen
+    if avg < PH_LOW:
+        delta = PH_LOW - avg
+        direction = "up"
     else:
-        client.publish(COMMAND_TOPIC, "phup")
-        client.loop_write()
-        time.sleep(5)
+        delta = avg - PH_HIGH
+        direction = "down"
 
-    # Spülen
-    client.publish(COMMAND_TOPIC, "water")
-    client.loop_write()
-    time.sleep(15)
+    # Anzahl Pulsbefehle berechnen
+    pulses = math.ceil(delta / PULSE_STEP)
+    print(f"{v}: avg={avg:.2f}, delta={delta:.2f} -> {pulses} x ph{direction}")
 
-    # Ventil schließen
-    client.publish(COMMAND_TOPIC, valve_close)
-    client.loop_write()
+    # Aktionssequenz
+    run_sequence(v, direction, pulses)
 
-# Zähler publizieren
-def publish_adjustment_count(versuch, direction):
-    subtopic = f"{versuch}/ph{direction}"
-    count = adjustment_count[versuch][f"ph{direction.capitalize()}"]
-    client.publish(subtopic, count)
-    print(f"{subtopic}: {count}")
+    # Zähler hochzählen und publishen
+    key = "phDown" if direction == "down" else "phUp"
+    adjustment_count[v][key] += pulses
+    publish_adjustment_count(v, direction)
+    last_action_time[v] = now
 
-# MQTT-Handlers registrieren und Client starten
+# Ventil- und pH-Sequenz
+ def run_sequence(v, direction, count):
+    open_cmd  = f"{v.lower()}valveopen"
+    close_cmd = f"{v.lower()}valveclose"
+    client.publish(COMMAND_TOPIC, open_cmd); client.loop_write(); time.sleep(5)
+    for _ in range(count):
+        client.publish(COMMAND_TOPIC, f"ph{direction}")
+        client.loop_write(); time.sleep(5)
+    client.publish(COMMAND_TOPIC, "water"); client.loop_write(); time.sleep(15)
+    client.publish(COMMAND_TOPIC, close_cmd); client.loop_write()
+
+# Zähler publishen
+ def publish_adjustment_count(v, direction):
+    topic = f"{v}/ph{direction}"
+    count = adjustment_count[v]["ph" + direction.capitalize()]
+    client.publish(topic, count)
+    print(f"{topic}: {count}")
+
+# MQTT-Handlers registrieren und Schleife starten
 client.on_connect = on_connect
 client.on_message = on_message
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
