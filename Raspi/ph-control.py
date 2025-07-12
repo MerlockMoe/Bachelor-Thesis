@@ -1,4 +1,3 @@
-```python
 #!/usr/bin/env python3
 import os
 import glob
@@ -19,7 +18,7 @@ COMMAND_TOPIC = "HW-888/command"
 # Sollbereich und Reglerparameter
 PH_LOW = 5.5              # Untere Grenze
 PH_HIGH = 6.0             # Obere Grenze
-PULSE_STEP = 0.15          # Abweichung, die einen Puls auslöst
+PULSE_STEP = 0.3          # Abweichung, die einen Puls auslöst
 WINDOW_SEC = 60 * 60      # Mittelwertfenster in Sekunden
 COOLDOWN_SEC = 60 * 60    # Cooldown nach Anpassung
 
@@ -148,15 +147,14 @@ def on_message(client, userdata, msg):
     pulses = math.ceil(delta / PULSE_STEP)
     print(f"[INFO] {key}: avg={avg:.2f}, delta={delta:.2f}, pulses={pulses}")
 
-    # Führe Sequenz aus
+    # Führe Sequenz aus und aktualisiere Zähler
     last_action_time[key] = now
     run_sequence(key, direction, pulses)
-    # Zähler updaten und publizieren
     adj_key = "phDown" if direction == "down" else "phUp"
     adjustment_count[key][adj_key] += pulses
     publish_adjustment_count(key, direction)
 
-# Client einrichten
+# Client einrichten und starten
 client = mqtt.Client()
 client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
 client.on_connect = on_connect
@@ -165,4 +163,3 @@ client.on_message = on_message
 print("[INFO] Starte pH-Regler...")
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
 client.loop_forever()
-```
