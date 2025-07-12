@@ -21,10 +21,11 @@ PULSE_STEP = 0.3               # Abweichung pro Puls
 PH_DURATION_THRESHOLD = 60 * 60  # Fenstergröße in Sekunden für Mittelwert
 PH_COOLDOWN = 60 * 60            # Cooldown nach Anpassung in Sekunden
 
-# Zähler aus CSV laden
+# Logs-Verzeichnis zum Laden der Zähler
 LOG_DIR = os.path.expanduser("~/logs")
 CSV_PATTERN = os.path.join(LOG_DIR, "mqtt_log_*.csv")
 
+# Hilfsfunktion: Lädt letzte Anpassungszähler aus der neuesten CSV
 def load_adjustment_counts():
     counts = {}
     files = glob.glob(CSV_PATTERN)
@@ -47,7 +48,7 @@ def load_adjustment_counts():
         pass
     return counts
 
-# Initiale Zähler laden und setzen
+# Initiale Zähler laden und Default-Werte setzen
 loaded_counts = load_adjustment_counts()
 adjustment_count = defaultdict(lambda: {"phDown": 0, "phUp": 0})
 for v, vals in loaded_counts.items():
@@ -68,14 +69,15 @@ def publish_initial_counts():
         client.publish(f"{v}/phup",   vals["phUp"])
 
 # Callback bei Verbindung
- def on_connect(client, userdata, flags, rc):
-    print("Verbunden mit MQTT-Broker")
+def on_connect(client, userdata, flags, rc):
+    print("Verbunden mit MQTT-Broker (Code {}), abonniere Topics...".format(rc))
     for topic in ph_history:
         client.subscribe(topic)
+        print(f"Abonniert: {topic}")
     publish_initial_counts()
 
 # Callback bei eingehender Nachricht
- def on_message(client, userdata, msg):
+def on_message(client, userdata, msg):
     topic = msg.topic
     try:
         ph = float(msg.payload.decode())
@@ -86,11 +88,10 @@ def publish_initial_counts():
 
     # Mittelwertbildung über definiertes Zeitfenster
     recent = [v for t, v in ph_history[topic] if now - t <= PH_DURATION_THRESHOLD]
-    # Prüfen, ob Fenster voll ist
     if not ph_history[topic] or now - ph_history[topic][0][0] < PH_DURATION_THRESHOLD:
         return
-    v = topic.split('/')[0]
 
+    v = topic.split('/')[0]
     # Cooldown prüfen
     if now - last_action_time[v] < PH_COOLDOWN:
         return
@@ -100,7 +101,7 @@ def publish_initial_counts():
     if PH_LOW <= avg <= PH_HIGH:
         return  # Innerhalb des gewünschten Bereichs
 
-    # Abweichung absolut bestimmen
+    # Abweichung bestimmen
     if avg < PH_LOW:
         delta = PH_LOW - avg
         direction = "up"
@@ -113,33 +114,30 @@ def publish_initial_counts():
     print(f"{v}: avg={avg:.2f}, delta={delta:.2f} -> {pulses} x ph{direction}")
 
     # Aktionssequenz
-    run_sequence(v, direction, pulses)
-
-    # Zähler hochzählen und publishen
-    key = "phDown" if direction == "down" else "phUp"
-    adjustment_count[v][key] += pulses
-    publish_adjustment_count(v, direction)
-    last_action_time[v] = now
-
-# Ventil- und pH-Sequenz
- def run_sequence(v, direction, count):
+def run_sequence(v, direction, count):
     open_cmd  = f"{v.lower()}valveopen"
     close_cmd = f"{v.lower()}valveclose"
-    client.publish(COMMAND_TOPIC, open_cmd); client.loop_write(); time.sleep(5)
+    client.publish(COMMAND_TOPIC, open_cmd)
+    client.loop_write()
+    time.sleep(5)
     for _ in range(count):
         client.publish(COMMAND_TOPIC, f"ph{direction}")
-        client.loop_write(); time.sleep(5)
-    client.publish(COMMAND_TOPIC, "water"); client.loop_write(); time.sleep(15)
-    client.publish(COMMAND_TOPIC, close_cmd); client.loop_write()
+        client.loop_write()
+        time.sleep(5)
+    client.publish(COMMAND_TOPIC, "water")
+    client.loop_write()
+    time.sleep(15)
+    client.publish(COMMAND_TOPIC, close_cmd)
+    client.loop_write()
 
 # Zähler publishen
- def publish_adjustment_count(v, direction):
+def publish_adjustment_count(v, direction):
     topic = f"{v}/ph{direction}"
     count = adjustment_count[v]["ph" + direction.capitalize()]
     client.publish(topic, count)
     print(f"{topic}: {count}")
 
-# MQTT-Handlers registrieren und Schleife starten
+# MQTT-Handlers registrieren und Client starten
 client.on_connect = on_connect
 client.on_message = on_message
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
