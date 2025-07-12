@@ -18,7 +18,7 @@ COMMAND_TOPIC = "HW-888/command"
 # Sollbereich und Reglerparameter
 PH_LOW = 5.5              # Untere Grenze
 PH_HIGH = 6.0             # Obere Grenze
-PULSE_STEP = 0.3          # Abweichung, die einen Puls auslöst
+PULSE_STEP = 0.1          # Abweichung, die einen Puls auslöst
 WINDOW_SEC = 60 * 60      # Mittelwertfenster in Sekunden
 COOLDOWN_SEC = 60 * 60    # Cooldown nach Anpassung
 
