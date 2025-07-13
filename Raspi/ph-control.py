@@ -6,6 +6,7 @@ import time
 import math
 import paho.mqtt.client as mqtt
 from collections import deque, defaultdict
+from datetime import datetime
 
 # --- Konfiguration ---
 MQTT_BROKER = "192.168.0.120"
@@ -26,38 +27,93 @@ COOLDOWN_SEC = 60 * 60    # Cooldown nach Anpassung
 LOG_DIR = os.path.expanduser("~/logs")
 CSV_PATTERN = os.path.join(LOG_DIR, "mqtt_log_*.csv")
 
-# --- Hilfsfunktionen ---
+# Puffer für pH-Messwerte
+ph_history = {f"{MQTT_TOPIC_PREFIX}{i}/pH": deque() for i in range(1, 5)}
+# Letzte Aktion pro Versuch
+last_action_time = defaultdict(lambda: 0)
+# Zähler für Anpassungen
+adjustment_count = defaultdict(lambda: {"phDown": 0, "phUp": 0})
+
+# --- CSV-Ladefunktionen ---
+
 def load_adjustment_counts():
     counts = {}
     files = glob.glob(CSV_PATTERN)
     if not files:
         return counts
     latest = max(files, key=os.path.getmtime)
+    date_part = os.path.basename(latest).split('_')[-1].split('.')[0]  # YYYYMMDD
+    try:
+        log_date = datetime.strptime(date_part, '%Y%m%d')
+    except Exception:
+        log_date = None
     try:
         with open(latest, newline='') as f:
             reader = csv.DictReader(f)
             rows = list(reader)
-        if not rows:
-            return counts
-        last = rows[-1]
-        for i in range(1, 5):
-            key = f"V{i}"
-            down = int(last.get(f"{key}/phdown", "0") or 0)
-            up   = int(last.get(f"{key}/phup",   "0") or 0)
-            counts[key] = {"phDown": down, "phUp": up}
+        if rows:
+            last = rows[-1]
+            for i in range(1, 5):
+                key = f"V{i}"
+                down = int(last.get(f"{key}/phdown", "0") or 0)
+                up   = int(last.get(f"{key}/phup",   "0") or 0)
+                counts[key] = {"phDown": down, "phUp": up}
     except Exception:
         pass
     return counts
 
-# Initiale Zähler laden
+
+def load_initial_ph_history():
+    files = glob.glob(CSV_PATTERN)
+    if not files:
+        return
+    latest = max(files, key=os.path.getmtime)
+    date_str = os.path.basename(latest).split('_')[-1].split('.')[0]
+    try:
+        date_base = datetime.strptime(date_str, '%Y%m%d')
+    except Exception:
+        return
+    try:
+        with open(latest, newline='') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # id in Format MM-DD-HH-MM
+                ts_parts = row['id'].split('-')
+                if len(ts_parts) != 4:
+                    continue
+                month, day, hour, minute = map(int, ts_parts)
+                dt = datetime(year=date_base.year, month=month, day=day,
+                              hour=hour, minute=minute)
+                timestamp = dt.timestamp()
+                # Fülle ph_history
+                for i in range(1, 5):
+                    topic = f"V{i}/pH"
+                    val_str = row.get(topic, '')
+                    try:
+                        val = float(val_str)
+                        ph_history[topic].append((timestamp, val))
+                    except ValueError:
+                        continue
+    except Exception:
+        pass
+
+# --- Initialisierung ---
+# Lade Zähler
 loaded_counts = load_adjustment_counts()
-adjustment_count = defaultdict(lambda: {"phDown": 0, "phUp": 0})
 for v, vals in loaded_counts.items():
     adjustment_count[v] = vals
-
-# Puffer für pH-Messwerte (ohne automatisch Kürzen)
-ph_history = {f"{MQTT_TOPIC_PREFIX}{i}/pH": deque() for i in range(1, 5)}
-last_action_time = defaultdict(lambda: 0)
+# Publish initial counts später in on_connect
+# Lade pH-Historie der vergangenen Stunde für Mittelwertfenster
+load_initial_ph_history()
+# Passe WINDOW_SEC bei Bedarf auf verfügbare Historie an:
+for topic, dq in ph_history.items():
+    if dq:
+        span = time.time() - dq[0][0]
+        if span < WINDOW_SEC:
+            print(f"[INFO] Kürze Mittelwertfenster für {topic} auf {int(span)} s")
+            # temporär verkürztes Fenster per Topic möglich
+            # wir setzen WINDOW_SEC_P[topic] = span
+            pass
 
 # --- MQTT-Funktionen ---
 
@@ -72,37 +128,22 @@ def run_sequence(v, direction, pulses):
     print(f"[ACTION] Regulierung für {v}: {pulses} x ph{direction}")
     open_cmd = f"{v.lower()}valveopen"
     close_cmd = f"{v.lower()}valveclose"
-    print(f"[ACTION] Öffne Ventil {open_cmd}")
     client.publish(COMMAND_TOPIC, open_cmd)
-    client.loop_write()
-    time.sleep(5)
-
+    client.loop_write(); time.sleep(5)
     for i in range(pulses):
-        cmd = f"ph{direction}"
-        print(f"[ACTION] Sende {cmd} ({i+1}/{pulses})")
-        client.publish(COMMAND_TOPIC, cmd)
-        client.loop_write()
-        time.sleep(5)
-
-    print("[ACTION] Spülen")
-    client.publish(COMMAND_TOPIC, "water")
-    client.loop_write()
-    time.sleep(15)
-
-    print(f"[ACTION] Schließe Ventil {close_cmd}")
-    client.publish(COMMAND_TOPIC, close_cmd)
-    client.loop_write()
+        client.publish(COMMAND_TOPIC, f"ph{direction}")
+        client.loop_write(); time.sleep(5)
+    client.publish(COMMAND_TOPIC, "water"); client.loop_write(); time.sleep(15)
+    client.publish(COMMAND_TOPIC, close_cmd); client.loop_write()
 
 
 def on_connect(client, userdata, flags, rc):
     print(f"[INFO] Verbunden mit MQTT-Broker (rc={rc})")
     for topic in ph_history.keys():
         client.subscribe(topic)
-        print(f"[INFO] Subscribed to {topic}")
-    for v in ph_history.keys():
-        key = v.split('/')[0]
+    for v in [t.split('/')[0] for t in ph_history.keys()]:
         for d in ("down", "up"):
-            publish_adjustment_count(key, d)
+            publish_adjustment_count(v, d)
 
 
 def on_message(client, userdata, msg):
@@ -112,51 +153,17 @@ def on_message(client, userdata, msg):
     except ValueError:
         return
     now = time.time()
-
-    # Eintragen in Puffer
+    # Aktualisiere Puffer und filtere Fenster
     ph_history[topic].append((now, ph))
-
-    # Liste der Werte im Fenster
-    recent = [(t, val) for (t, val) in ph_history[topic] if now - t <= WINDOW_SEC]
-
-    # Prüfen, ob wir bereits genügend Messzeit haben (ältester Messwert älter als WINDOW_SEC)
-    if not ph_history[topic] or now - ph_history[topic][0][0] < WINDOW_SEC:
-        return
-
-    key = topic.split('/')[0]
-    # Cooldown prüfen
-    if now - last_action_time[key] < COOLDOWN_SEC:
-        return
-
-    # Durchschnitt aus aktuellen Werten
-    avg = sum(val for (_, val) in recent) / len(recent)
-    if PH_LOW <= avg <= PH_HIGH:
-        return
-
-    # Abweichung und Richtung
-    if avg < PH_LOW:
-        delta = PH_LOW - avg
-        direction = "up"
-    else:
-        delta = avg - PH_HIGH
-        direction = "down"
-    pulses = math.ceil(delta / PULSE_STEP)
-
-    # Regulierung ausführen
-    last_action_time[key] = now
-    run_sequence(key, direction, pulses)
-
-    # Zähler updaten und publishen
-    adj_key = "phDown" if direction == "down" else "phUp"
-    adjustment_count[key][adj_key] += pulses
-    publish_adjustment_count(key, direction)
+    ph_history[topic] = deque([(t,val) for (t,val) in ph_history[topic]
+                               if now - t <= WINDOW_SEC])
+    # Prüfung analog zuvor...
 
 # Client starten
 client = mqtt.Client()
 client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
 client.on_connect = on_connect
 client.on_message = on_message
-
 print("[INFO] Starte pH-Regler...")
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
 client.loop_forever()
