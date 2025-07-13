@@ -20,7 +20,7 @@ COMMAND_TOPIC = "HW-888/command"
 PH_LOW = 5.5              # Untere Grenze
 PH_HIGH = 6.0             # Obere Grenze
 PULSE_STEP = 0.1          # Abweichung, die einen Puls auslöst
-WINDOW_SEC = 60 * 60      # Mittelwertfenster in Sekunden
+WINDOW_SEC = 10 * 60      # Mittelwertfenster in Sekunden
 COOLDOWN_SEC = 60 * 60    # Cooldown nach Anpassung
 
 # Logs-Verzeichnis
@@ -42,11 +42,6 @@ def load_adjustment_counts():
     if not files:
         return counts
     latest = max(files, key=os.path.getmtime)
-    date_part = os.path.basename(latest).split('_')[-1].split('.')[0]  # YYYYMMDD
-    try:
-        log_date = datetime.strptime(date_part, '%Y%m%d')
-    except Exception:
-        log_date = None
     try:
         with open(latest, newline='') as f:
             reader = csv.DictReader(f)
@@ -57,19 +52,21 @@ def load_adjustment_counts():
                 key = f"V{i}"
                 down = int(last.get(f"{key}/phdown", "0") or 0)
                 up   = int(last.get(f"{key}/phup",   "0") or 0)
-                counts[key] = {"phDown": down, "phUp": up}
+                adjustment_count[key] = {"phDown": down, "phUp": up}
     except Exception:
         pass
-    return counts
+    return adjustment_count
 
 
 def load_initial_ph_history():
+    # Fülle ph_history mit Werten der letzten Stunde aus der letzten CSV
     files = glob.glob(CSV_PATTERN)
     if not files:
         return
     latest = max(files, key=os.path.getmtime)
-    date_str = os.path.basename(latest).split('_')[-1].split('.')[0]
+    # Datum aus Dateiname extrahieren
     try:
+        date_str = os.path.basename(latest).split('_')[-1].split('.')[0]  # YYYYMMDD
         date_base = datetime.strptime(date_str, '%Y%m%d')
     except Exception:
         return
@@ -77,43 +74,32 @@ def load_initial_ph_history():
         with open(latest, newline='') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                # id in Format MM-DD-HH-MM
-                ts_parts = row['id'].split('-')
-                if len(ts_parts) != 4:
+                # Zeitpunkt parsieren: MM-DD-HH-MM
+                parts = row['id'].split('-')
+                if len(parts) != 4:
                     continue
-                month, day, hour, minute = map(int, ts_parts)
-                dt = datetime(year=date_base.year, month=month, day=day,
-                              hour=hour, minute=minute)
-                timestamp = dt.timestamp()
-                # Fülle ph_history
+                month, day, hour, minute = map(int, parts)
+                dt = datetime(year=date_base.year, month=month, day=day, hour=hour, minute=minute)
+                ts = dt.timestamp()
+                # Füge zu jedem Thema hinzu
                 for i in range(1, 5):
                     topic = f"V{i}/pH"
                     val_str = row.get(topic, '')
                     try:
                         val = float(val_str)
-                        ph_history[topic].append((timestamp, val))
+                        # Nur Werte der letzten WINDOW_SEC
+                        if time.time() - ts <= WINDOW_SEC:
+                            ph_history[topic].append((ts, val))
                     except ValueError:
                         continue
     except Exception:
         pass
 
 # --- Initialisierung ---
-# Lade Zähler
-loaded_counts = load_adjustment_counts()
-for v, vals in loaded_counts.items():
-    adjustment_count[v] = vals
-# Publish initial counts später in on_connect
-# Lade pH-Historie der vergangenen Stunde für Mittelwertfenster
+# Lade Zähler und initial publishing erfolgt in on_connect
+load_adjustment_counts()
+# Lade historische pH-Werte für initiales Fenster
 load_initial_ph_history()
-# Passe WINDOW_SEC bei Bedarf auf verfügbare Historie an:
-for topic, dq in ph_history.items():
-    if dq:
-        span = time.time() - dq[0][0]
-        if span < WINDOW_SEC:
-            print(f"[INFO] Kürze Mittelwertfenster für {topic} auf {int(span)} s")
-            # temporär verkürztes Fenster per Topic möglich
-            # wir setzen WINDOW_SEC_P[topic] = span
-            pass
 
 # --- MQTT-Funktionen ---
 
@@ -129,21 +115,24 @@ def run_sequence(v, direction, pulses):
     open_cmd = f"{v.lower()}valveopen"
     close_cmd = f"{v.lower()}valveclose"
     client.publish(COMMAND_TOPIC, open_cmd)
-    client.loop_write(); time.sleep(5)
-    for i in range(pulses):
+    time.sleep(5)
+    for _ in range(pulses):
         client.publish(COMMAND_TOPIC, f"ph{direction}")
-        client.loop_write(); time.sleep(5)
-    client.publish(COMMAND_TOPIC, "water"); client.loop_write(); time.sleep(15)
-    client.publish(COMMAND_TOPIC, close_cmd); client.loop_write()
+        time.sleep(5)
+    client.publish(COMMAND_TOPIC, "water")
+    time.sleep(15)
+    client.publish(COMMAND_TOPIC, close_cmd)
 
 
 def on_connect(client, userdata, flags, rc):
     print(f"[INFO] Verbunden mit MQTT-Broker (rc={rc})")
     for topic in ph_history.keys():
         client.subscribe(topic)
-    for v in [t.split('/')[0] for t in ph_history.keys()]:
+    # Initiale Zähler publishen
+    for v in ph_history.keys():
+        key = v.split('/')[0]
         for d in ("down", "up"):
-            publish_adjustment_count(v, d)
+            publish_adjustment_count(key, d)
 
 
 def on_message(client, userdata, msg):
@@ -153,11 +142,36 @@ def on_message(client, userdata, msg):
     except ValueError:
         return
     now = time.time()
-    # Aktualisiere Puffer und filtere Fenster
+    # Puffer aktualisieren
     ph_history[topic].append((now, ph))
-    ph_history[topic] = deque([(t,val) for (t,val) in ph_history[topic]
-                               if now - t <= WINDOW_SEC])
-    # Prüfung analog zuvor...
+    # Werte im aktuellen Fenster
+    recent = [(t, val) for (t, val) in ph_history[topic] if now - t <= WINDOW_SEC]
+    # Fenster voll?
+    if not ph_history[topic] or now - ph_history[topic][0][0] < WINDOW_SEC:
+        return
+    key = topic.split('/')[0]
+    # Cooldown prüfen
+    if now - last_action_time[key] < COOLDOWN_SEC:
+        return
+    # Durchschnitt
+    avg = sum(val for (_, val) in recent) / len(recent)
+    if PH_LOW <= avg <= PH_HIGH:
+        return
+    # Abweichung und Richtung
+    if avg < PH_LOW:
+        delta = PH_LOW - avg
+        direction = "up"
+    else:
+        delta = avg - PH_HIGH
+        direction = "down"
+    pulses = math.ceil(delta / PULSE_STEP)
+    # Aktion ausführen
+    last_action_time[key] = now
+    run_sequence(key, direction, pulses)
+    # Zähler aktualisieren und publishen
+    adj_key = "phDown" if direction == "down" else "phUp"
+    adjustment_count[key][adj_key] += pulses
+    publish_adjustment_count(key, direction)
 
 # Client starten
 client = mqtt.Client()
