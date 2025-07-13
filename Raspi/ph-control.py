@@ -55,7 +55,7 @@ adjustment_count = defaultdict(lambda: {"phDown": 0, "phUp": 0})
 for v, vals in loaded_counts.items():
     adjustment_count[v] = vals
 
-# Puffer für pH-Messwerte
+# Puffer für pH-Messwerte (ohne automatisch Kürzen)
 ph_history = {f"{MQTT_TOPIC_PREFIX}{i}/pH": deque() for i in range(1, 5)}
 last_action_time = defaultdict(lambda: 0)
 
@@ -69,7 +69,6 @@ def publish_adjustment_count(v, direction):
 
 
 def run_sequence(v, direction, pulses):
-    # Log nur hier
     print(f"[ACTION] Regulierung für {v}: {pulses} x ph{direction}")
     open_cmd = f"{v.lower()}valveopen"
     close_cmd = f"{v.lower()}valveclose"
@@ -113,24 +112,24 @@ def on_message(client, userdata, msg):
     except ValueError:
         return
     now = time.time()
-    # Puffer aktualisieren
-    ph_history[topic].append((now, ph))
-    ph_history[topic] = deque([
-        (t, val) for (t, val) in ph_history[topic]
-        if now - t <= WINDOW_SEC
-    ])
 
-    # Fenster voll?
+    # Eintragen in Puffer
+    ph_history[topic].append((now, ph))
+
+    # Liste der Werte im Fenster
+    recent = [(t, val) for (t, val) in ph_history[topic] if now - t <= WINDOW_SEC]
+
+    # Prüfen, ob wir bereits genügend Messzeit haben (ältester Messwert älter als WINDOW_SEC)
     if not ph_history[topic] or now - ph_history[topic][0][0] < WINDOW_SEC:
         return
 
     key = topic.split('/')[0]
-    # Cooldown
+    # Cooldown prüfen
     if now - last_action_time[key] < COOLDOWN_SEC:
         return
 
-    # Mittelwert
-    avg = sum(val for (_, val) in ph_history[topic]) / len(ph_history[topic])
+    # Durchschnitt aus aktuellen Werten
+    avg = sum(val for (_, val) in recent) / len(recent)
     if PH_LOW <= avg <= PH_HIGH:
         return
 
@@ -146,6 +145,7 @@ def on_message(client, userdata, msg):
     # Regulierung ausführen
     last_action_time[key] = now
     run_sequence(key, direction, pulses)
+
     # Zähler updaten und publishen
     adj_key = "phDown" if direction == "down" else "phUp"
     adjustment_count[key][adj_key] += pulses
